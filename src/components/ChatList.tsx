@@ -1,0 +1,263 @@
+import { useState, useEffect } from 'react';
+import { db, auth } from '../firebase';
+import { 
+  collection, 
+  query, 
+  where, 
+  onSnapshot, 
+  orderBy, 
+  doc, 
+  getDoc,
+  updateDoc,
+  addDoc,
+  setDoc,
+  serverTimestamp
+} from 'firebase/firestore';
+import { Avatar, AvatarFallback, AvatarImage } from "@components/ui/avatar"
+import { Card } from "@components/ui/card"
+import { Button } from "@components/ui/button"
+import { Input } from "@components/ui/input"
+import { ScrollArea } from "@components/ui/scroll-area"
+import { MessageSquare, Send, ArrowLeft, MoreVertical, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { formatDistanceToNow } from 'date-fns';
+import { id } from 'date-fns/locale';
+import { toast } from 'sonner';
+
+export default function ChatList({ onViewProfile }: { onViewProfile?: (userId: string) => void }) {
+  const [chats, setChats] = useState<any[]>([]);
+  const [selectedChat, setSelectedChat] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const user = auth.currentUser;
+
+  useEffect(() => {
+    if (!user) return;
+
+    const q = query(
+      collection(db, 'chats'),
+      where('participants', 'array-contains', user.uid),
+      orderBy('lastMessageAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const chatData = await Promise.all(snapshot.docs.map(async (chatDoc) => {
+        const data = chatDoc.data();
+        const otherUserId = data.participants.find((p: string) => p !== user.uid);
+        const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
+        const otherUserData = otherUserDoc.data();
+
+        return {
+          id: chatDoc.id,
+          ...data,
+          otherUser: {
+            uid: otherUserId,
+            displayName: otherUserData?.displayName || 'User',
+            photoURL: otherUserData?.photoURL || '',
+            isVerified: otherUserData?.isVerified || false,
+            role: otherUserData?.role || 'user',
+            status: otherUserData?.status || 'active'
+          }
+        };
+      }));
+      setChats(chatData);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  if (selectedChat) {
+    return <ChatRoom chat={selectedChat} onBack={() => setSelectedChat(null)} onViewProfile={onViewProfile} />;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between px-1">
+        <h2 className="text-2xl font-bold text-zinc-900">Pesan</h2>
+        <div className="bg-zinc-100 p-2 rounded-full">
+          <MessageSquare className="w-5 h-5 text-zinc-500" />
+        </div>
+      </div>
+
+      <div className="grid gap-2">
+        {loading ? (
+          <div className="text-center py-10 text-zinc-400">Memuat pesan...</div>
+        ) : chats.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
+            <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center">
+              <MessageSquare className="w-8 h-8 text-zinc-300" />
+            </div>
+            <div className="space-y-1">
+              <p className="font-semibold text-zinc-900">Belum ada pesan</p>
+              <p className="text-sm text-zinc-500">Mulai percakapan dengan penjual di beranda.</p>
+            </div>
+          </div>
+        ) : (
+          chats.map((chat) => (
+            <motion.div
+              key={chat.id}
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              onClick={() => setSelectedChat(chat)}
+              className="group cursor-pointer"
+            >
+              <Card className="p-4 border-zinc-100 hover:bg-zinc-50 transition-colors shadow-none border flex items-center gap-4">
+                <Avatar className="w-12 h-12 border border-zinc-100">
+                  <AvatarImage src={chat.otherUser.photoURL} />
+                  <AvatarFallback>{chat.otherUser.displayName[0]}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <div className="flex items-center gap-1">
+                      <p className="font-bold text-zinc-900 truncate">{chat.otherUser.displayName}</p>
+                      {(chat.otherUser.isVerified || chat.otherUser.role === 'admin') && (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 fill-blue-50 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-zinc-400 uppercase font-medium">
+                      {chat.lastMessageAt?.seconds ? formatDistanceToNow(new Date(chat.lastMessageAt.seconds * 1000), { locale: id }) : ''}
+                    </p>
+                  </div>
+                  <p className="text-sm text-zinc-500 truncate leading-tight">
+                    {chat.lastMessage || 'Mulai percakapan...'}
+                  </p>
+                </div>
+              </Card>
+            </motion.div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChatRoom({ chat, onBack, onViewProfile }: { chat: any, onBack: () => void, onViewProfile?: (userId: string) => void }) {
+  const [messages, setMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const user = auth.currentUser;
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'chats', chat.id, 'messages'),
+      orderBy('createdAt', 'asc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => unsubscribe();
+  }, [chat.id]);
+
+  const handleSendMessage = async () => {
+    if (!newMessage.trim() || !user) return;
+
+    try {
+      const messageText = newMessage;
+      setNewMessage('');
+
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const userData = userDoc.data();
+
+      await addDoc(collection(db, 'chats', chat.id, 'messages'), {
+        senderId: user.uid,
+        text: messageText,
+        createdAt: serverTimestamp()
+      });
+
+      await updateDoc(doc(db, 'chats', chat.id), {
+        lastMessage: messageText,
+        lastMessageAt: serverTimestamp(),
+        lastSenderId: user.uid,
+        lastSenderName: userData?.displayName || 'User'
+      });
+    } catch (error) {
+      toast.error('Gagal mengirim pesan');
+    }
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      className="fixed inset-0 z-50 bg-white flex flex-col"
+    >
+      <header className="h-16 border-b flex items-center px-4 gap-4 bg-white/80 backdrop-blur sticky top-0">
+        <Button variant="ghost" size="icon" onClick={onBack}>
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div 
+          className="flex items-center gap-3 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
+          onClick={() => {
+            onBack();
+            onViewProfile?.(chat.otherUser.uid);
+          }}
+        >
+          <Avatar className="w-9 h-9">
+            <AvatarImage src={chat.otherUser.photoURL} />
+            <AvatarFallback>{chat.otherUser.displayName[0]}</AvatarFallback>
+          </Avatar>
+          <div>
+            <div className="flex items-center gap-1">
+              <p className="text-sm font-bold text-zinc-900">{chat.otherUser.displayName}</p>
+              {(chat.otherUser.isVerified || chat.otherUser.role === 'admin') && (
+                <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 fill-blue-50 shrink-0" />
+              )}
+            </div>
+            <p className="text-[10px] text-green-500 font-bold uppercase tracking-widest">Online</p>
+          </div>
+        </div>
+        <Button variant="ghost" size="icon">
+          <MoreVertical className="w-5 h-5 text-zinc-400" />
+        </Button>
+      </header>
+
+      <ScrollArea className="flex-1 p-4 bg-zinc-50/50">
+        <div className="space-y-4">
+          {messages.map((msg) => (
+            <div 
+              key={msg.id} 
+              className={`flex ${msg.senderId === user?.uid ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`max-w-[80%] p-3 rounded-2xl shadow-sm border ${
+                msg.senderId === user?.uid 
+                  ? 'bg-zinc-900 text-white border-zinc-800 rounded-tr-none' 
+                  : 'bg-white text-zinc-900 border-zinc-100 rounded-tl-none'
+              }`}>
+                <p className="text-sm leading-relaxed">{msg.text}</p>
+                <p className={`text-[9px] mt-1.5 font-medium uppercase tracking-wider ${
+                  msg.senderId === user?.uid ? 'text-zinc-400' : 'text-zinc-400'
+                }`}>
+                  {msg.createdAt?.seconds ? new Date(msg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+
+      <div className="p-4 border-t bg-white">
+        {chat.otherUser.status === 'banned' ? (
+          <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl text-center font-medium flex items-center justify-center gap-2">
+            <ShieldAlert className="w-4 h-4" />
+            Akun ini sudah di-ban karena melanggar aturan
+          </div>
+        ) : (
+          <div className="flex gap-2 max-w-2xl mx-auto w-full">
+            <Input 
+              placeholder="Ketik pesan..." 
+              className="rounded-full bg-zinc-100 border-none px-6 h-11"
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+            />
+            <Button size="icon" className="rounded-full h-11 w-11 shrink-0 shadow-lg" onClick={handleSendMessage}>
+              <Send className="w-5 h-5" />
+            </Button>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
