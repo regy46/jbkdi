@@ -133,10 +133,13 @@ export default function ChatList({ onViewProfile, userData, initialChatId, onCha
         setSelectedChatId(null);
         onChatClosed?.();
       }} onViewProfile={onViewProfile} currentUserData={userData} />;
-    } else if (!loading) {
-      // If we have a selected ID but no chat is found and we're done loading,
-      // it might be a brand new chat that hasn't synced yet.
-      // We'll just wait for the snapshot to update.
+    } else {
+      return (
+        <div className="flex flex-col items-center justify-center h-[50vh] space-y-4">
+          <div className="w-8 h-8 border-4 border-zinc-200 border-t-zinc-900 rounded-full animate-spin" />
+          <p className="text-zinc-500 font-medium">Membuka percakapan...</p>
+        </div>
+      );
     }
   }
 
