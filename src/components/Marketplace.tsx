@@ -64,7 +64,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-export default function Marketplace({ onViewProfile, onNavigateToChats }: { onViewProfile?: (userId: string) => void, onNavigateToChats?: () => void }) {
+export default function Marketplace({ onViewProfile, onNavigateToChats, userData }: { onViewProfile?: (userId: string) => void, onNavigateToChats?: () => void, userData?: any }) {
   const [listings, setListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'sale' | 'request'>('all');
@@ -198,10 +198,12 @@ export default function Marketplace({ onViewProfile, onNavigateToChats }: { onVi
           </Tabs>
 
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-            <DialogTrigger render={<Button className="rounded-full shadow-lg shadow-zinc-200" />}>
-              <Plus className="w-4 h-4 mr-2" />
-              Posting
-            </DialogTrigger>
+            <DialogTrigger render={
+              <Button className="rounded-full shadow-lg shadow-zinc-200">
+                <Plus className="w-4 h-4 mr-2" />
+                Posting
+              </Button>
+            } />
             <DialogContent className="sm:max-w-[425px]">
               <DialogHeader>
                 <DialogTitle>Buat Postingan Baru</DialogTitle>
@@ -309,6 +311,7 @@ export default function Marketplace({ onViewProfile, onNavigateToChats }: { onVi
               onLike={() => toggleLike(listing.id, listing.likes)} 
               onViewProfile={onViewProfile}
               onNavigateToChats={onNavigateToChats}
+              currentUserData={userData}
             />
           ))
         )}
@@ -317,11 +320,10 @@ export default function Marketplace({ onViewProfile, onNavigateToChats }: { onVi
   );
 }
 
-export function ListingCard({ listing, onLike, hideActions = false, onViewProfile, onNavigateToChats }: any) {
+export function ListingCard({ listing, onLike, hideActions = false, onViewProfile, onNavigateToChats, currentUserData }: any) {
   const [isCommentOpen, setIsCommentOpen] = useState(false);
   const [comments, setComments] = useState<any[]>([]);
   const [newComment, setNewComment] = useState('');
-  const [userData, setUserData] = useState<any>(null);
   const user = auth.currentUser;
 
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -334,13 +336,10 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
   const [authorData, setAuthorData] = useState<any>(null);
 
   useEffect(() => {
-    if (user) {
-      getDoc(doc(db, 'users', user.uid)).then(snap => setUserData(snap.data()));
-    }
     if (listing.authorId) {
       getDoc(doc(db, 'users', listing.authorId)).then(snap => setAuthorData(snap.data()));
     }
-  }, [user, listing.authorId]);
+  }, [listing.authorId]);
 
   useEffect(() => {
     if (isCommentOpen) {
@@ -358,7 +357,7 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
       toast.success('Postingan dihapus');
       setIsDeleteDialogOpen(false);
     } catch (error) {
-      toast.error('Gagal menghapus');
+      handleFirestoreError(error, OperationType.DELETE, `listings/${listing.id}`);
     }
   };
 
@@ -368,7 +367,7 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
       toast.success('Postingan di-ban');
       setIsBanDialogOpen(false);
     } catch (error) {
-      toast.error('Gagal memproses');
+      handleFirestoreError(error, OperationType.UPDATE, `listings/${listing.id}`);
     }
   };
 
@@ -457,7 +456,7 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
     try {
       await addDoc(collection(db, 'reports'), {
         reporterId: user.uid,
-        reporterName: userData?.displayName || 'Anonim',
+        reporterName: currentUserData?.displayName || 'Anonim',
         targetId: listing.id,
         targetType: 'listing',
         targetTitle: listing.title,
@@ -478,7 +477,7 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
     }
   };
 
-  const isAdmin = userData?.role === 'admin';
+  const isAdmin = currentUserData?.role === 'admin';
   const isOwner = user?.uid === listing.authorId;
 
   return (
@@ -521,11 +520,11 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           )}
           {isAdmin && (
             <Dialog open={isBanDialogOpen} onOpenChange={setIsBanDialogOpen}>
-              <DialogTrigger asChild>
+              <DialogTrigger render={
                 <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50">
                   <ShieldAlert className="w-4 h-4" />
                 </Button>
-              </DialogTrigger>
+              } />
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Ban Postingan</DialogTitle>
@@ -540,11 +539,11 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           )}
           {(isOwner || isAdmin) && (
             <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-              <DialogTrigger asChild>
+              <DialogTrigger render={
                 <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-red-500 hover:bg-red-50">
                   <Trash2 className="w-4 h-4" />
                 </Button>
-              </DialogTrigger>
+              } />
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Hapus Postingan</DialogTitle>
@@ -559,11 +558,11 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           )}
           {!isOwner && (
             <Dialog open={isReportDialogOpen} onOpenChange={setIsReportDialogOpen}>
-              <DialogTrigger asChild>
+              <DialogTrigger render={
                 <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-orange-500 hover:bg-orange-50">
                   <Flag className="w-4 h-4" />
                 </Button>
-              </DialogTrigger>
+              } />
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Laporkan Postingan</DialogTitle>

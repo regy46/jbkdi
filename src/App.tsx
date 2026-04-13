@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot, collection, query, where, orderBy, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, collection, query, where, orderBy, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 import Auth from './components/Auth';
@@ -87,6 +87,28 @@ export default function App() {
       if (unsubscribeDoc) unsubscribeDoc();
     };
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const updatePresence = async () => {
+      try {
+        await updateDoc(doc(db, 'users', user.uid), {
+          lastActive: serverTimestamp()
+        });
+      } catch (error) {
+        console.error('Error updating presence:', error);
+      }
+    };
+
+    // Update immediately on mount
+    updatePresence();
+
+    // Then update every minute
+    const interval = setInterval(updatePresence, 60000);
+
+    return () => clearInterval(interval);
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -183,6 +205,7 @@ export default function App() {
               <Marketplace 
                 onViewProfile={handleViewProfile} 
                 onNavigateToChats={() => setActiveTab('chats')} 
+                userData={userData}
               />
             </motion.div>
           )}

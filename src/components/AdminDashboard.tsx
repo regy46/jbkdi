@@ -65,7 +65,7 @@ export default function AdminDashboard({ onViewProfile }: { onViewProfile: (user
       await updateDoc(doc(db, 'reports', reportId), { status });
       toast.success(`Laporan ${status === 'resolved' ? 'diselesaikan' : 'diabaikan'}`);
     } catch (error) {
-      toast.error('Gagal memperbarui laporan');
+      handleFirestoreError(error, OperationType.UPDATE, `reports/${reportId}`);
     }
   };
 
@@ -86,7 +86,7 @@ export default function AdminDashboard({ onViewProfile }: { onViewProfile: (user
       }
       await updateDoc(doc(db, 'reports', report.id), { status: 'resolved' });
     } catch (error) {
-      toast.error('Gagal melakukan tindakan');
+      handleFirestoreError(error, OperationType.WRITE, `admin_action/${action}`);
     }
   };
 

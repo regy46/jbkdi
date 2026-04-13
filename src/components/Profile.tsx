@@ -322,12 +322,12 @@ export default function Profile({ userData: currentUserData, viewUserId, onBack 
                   {profileData.isVerified ? 'Cabut Verifikasi' : 'Verifikasi'}
                 </Button>
                 <Dialog open={isBanDialogOpen} onOpenChange={setIsBanDialogOpen}>
-                  <DialogTrigger asChild>
+                  <DialogTrigger render={
                     <Button variant="outline" className="rounded-full px-4 border-red-200 text-red-500 hover:bg-red-50">
                       <ShieldAlert className="w-4 h-4 mr-2" />
                       Ban Akun
                     </Button>
-                  </DialogTrigger>
+                  } />
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Ban Pengguna?</DialogTitle>
@@ -344,12 +344,12 @@ export default function Profile({ userData: currentUserData, viewUserId, onBack 
               </>
             )}
             <Dialog open={isReportDialogOpen} onOpenChange={setIsReportDialogOpen}>
-              <DialogTrigger asChild>
+              <DialogTrigger render={
                 <Button variant="outline" className="rounded-full px-4 border-orange-200 text-orange-500 hover:bg-orange-50">
                   <Flag className="w-4 h-4 mr-2" />
                   Lapor
                 </Button>
-              </DialogTrigger>
+              } />
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Laporkan Pengguna</DialogTitle>
@@ -493,7 +493,7 @@ export default function Profile({ userData: currentUserData, viewUserId, onBack 
             </div>
           ) : (
             userListings.map(listing => (
-              <ListingCard key={listing.id} listing={listing} hideActions={true} />
+              <ListingCard key={listing.id} listing={listing} hideActions={true} currentUserData={currentUserData} />
             ))
           )}
         </div>

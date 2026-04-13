@@ -49,6 +49,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
+const userCache: { [key: string]: any } = {};
+
 export default function ChatList({ onViewProfile, userData }: { onViewProfile: (userId: string) => void, userData?: any }) {
   const [chats, setChats] = useState<any[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
@@ -60,32 +62,56 @@ export default function ChatList({ onViewProfile, userData }: { onViewProfile: (
 
     const q = query(
       collection(db, 'chats'),
-      where('participants', 'array-contains', user.uid),
-      orderBy('lastMessageAt', 'desc')
+      where('participants', 'array-contains', user.uid)
     );
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const chatData = await Promise.all(snapshot.docs.map(async (chatDoc) => {
-        const data = chatDoc.data();
-        const otherUserId = data.participants.find((p: string) => p !== user.uid);
-        const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
-        const otherUserData = otherUserDoc.data();
-
-        return {
-          id: chatDoc.id,
-          ...data,
-          otherUser: {
-            uid: otherUserId,
-            displayName: otherUserData?.displayName || 'User',
-            photoURL: otherUserData?.photoURL || '',
-            isVerified: otherUserData?.isVerified || false,
-            role: otherUserData?.role || 'user',
-            status: otherUserData?.status || 'active'
+      try {
+        const chatData = await Promise.all(snapshot.docs.map(async (chatDoc) => {
+          const data = chatDoc.data();
+          const otherUserId = data.participants.find((p: string) => p !== user.uid);
+          
+          let otherUserData = userCache[otherUserId];
+          if (!otherUserData) {
+            try {
+              const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
+              otherUserData = otherUserDoc.data();
+              if (otherUserData) {
+                userCache[otherUserId] = otherUserData;
+              }
+            } catch (err) {
+              console.error('Error fetching other user:', err);
+            }
           }
-        };
-      }));
-      setChats(chatData);
-      setLoading(false);
+
+          return {
+            id: chatDoc.id,
+            ...data,
+            otherUser: {
+              uid: otherUserId,
+              displayName: otherUserData?.displayName || 'User',
+              photoURL: otherUserData?.photoURL || '',
+              isVerified: otherUserData?.isVerified || false,
+              role: otherUserData?.role || 'user',
+              status: otherUserData?.status || 'active',
+              lastActive: otherUserData?.lastActive
+            }
+          };
+        }));
+
+        // Sort client-side to avoid composite index requirement
+        chatData.sort((a, b) => {
+          const timeA = a.lastMessageAt?.seconds || 0;
+          const timeB = b.lastMessageAt?.seconds || 0;
+          return timeB - timeA;
+        });
+
+        setChats(chatData);
+      } catch (err) {
+        console.error('Error processing chats:', err);
+      } finally {
+        setLoading(false);
+      }
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'chats');
       setLoading(false);
@@ -164,11 +190,13 @@ export default function ChatList({ onViewProfile, userData }: { onViewProfile: (
 function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any, onBack: () => void, onViewProfile?: (userId: string) => void, currentUserData?: any }) {
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [otherUserStatus, setOtherUserStatus] = useState<any>(chat.otherUser);
   const user = auth.currentUser;
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = currentUserData?.role === 'admin';
-  const isOtherBanned = chat.otherUser.status === 'banned' || chat.otherUser.status === 'deleted';
+  const isOtherBanned = otherUserStatus.status === 'banned' || otherUserStatus.status === 'deleted';
 
   useEffect(() => {
     const q = query(
@@ -177,7 +205,16 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const newMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMessages(prev => {
+        // Keep optimistic messages that haven't been synced yet
+        const optimistic = prev.filter(m => m.isOptimistic && !newMessages.find(nm => nm.text === m.text && nm.senderId === m.senderId));
+        return [...newMessages, ...optimistic].sort((a: any, b: any) => {
+          const timeA = a.createdAt?.seconds || 0;
+          const timeB = b.createdAt?.seconds || 0;
+          return timeA - timeB;
+        });
+      });
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, `chats/${chat.id}/messages`);
     });
@@ -185,16 +222,51 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
     return () => unsubscribe();
   }, [chat.id]);
 
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, 'users', chat.otherUser.uid), (docSnap) => {
+      if (docSnap.exists()) {
+        setOtherUserStatus(docSnap.data());
+      }
+    });
+    return () => unsubscribe();
+  }, [chat.otherUser.uid]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      const scrollContainer = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }
+    }
+  }, [messages]);
+
+  const isOnline = () => {
+    if (!otherUserStatus.lastActive) return false;
+    const lastActive = otherUserStatus.lastActive.toDate ? otherUserStatus.lastActive.toDate() : new Date(otherUserStatus.lastActive);
+    const now = new Date();
+    const diff = (now.getTime() - lastActive.getTime()) / 1000 / 60; // diff in minutes
+    return diff < 3; // consider online if active in last 3 minutes
+  };
+
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !user) return;
+    if (!newMessage.trim() || !user || isSending) return;
 
     const messageText = newMessage;
+    setIsSending(true);
+    setNewMessage('');
+
+    // Optimistic update
+    const tempId = Date.now().toString();
+    const optimisticMessage = {
+      id: tempId,
+      senderId: user.uid,
+      text: messageText,
+      createdAt: { seconds: Math.floor(Date.now() / 1000) }, // Temporary timestamp
+      isOptimistic: true
+    };
+    setMessages(prev => [...prev, optimisticMessage]);
+
     try {
-      setNewMessage('');
-
-      const userDoc = await getDoc(doc(db, 'users', user.uid));
-      const userData = userDoc.data();
-
       await addDoc(collection(db, 'chats', chat.id, 'messages'), {
         senderId: user.uid,
         text: messageText,
@@ -205,11 +277,14 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
         lastMessage: messageText,
         lastMessageAt: serverTimestamp(),
         lastSenderId: user.uid,
-        lastSenderName: userData?.displayName || 'User'
+        lastSenderName: currentUserData?.displayName || 'User'
       });
     } catch (error) {
+      setMessages(prev => prev.filter(m => m.id !== tempId));
       setNewMessage(messageText); // Restore message on failure
       handleFirestoreError(error, OperationType.WRITE, `chats/${chat.id}/messages`);
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -232,17 +307,25 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
           }}
         >
           <Avatar className="w-9 h-9">
-            <AvatarImage src={chat.otherUser.photoURL} />
-            <AvatarFallback>{chat.otherUser.displayName[0]}</AvatarFallback>
+            <AvatarImage src={otherUserStatus.photoURL} />
+            <AvatarFallback>{otherUserStatus.displayName?.[0]}</AvatarFallback>
           </Avatar>
           <div>
             <div className="flex items-center gap-1">
-              <p className="text-sm font-bold text-zinc-900">{chat.otherUser.displayName}</p>
-              {(chat.otherUser.isVerified || chat.otherUser.role === 'admin') && (
+              <p className="text-sm font-bold text-zinc-900">{otherUserStatus.displayName}</p>
+              {(otherUserStatus.isVerified || otherUserStatus.role === 'admin') && (
                 <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 fill-blue-50 shrink-0" />
               )}
             </div>
-            <p className="text-[10px] text-green-500 font-bold uppercase tracking-widest">Online</p>
+            {isOnline() ? (
+              <p className="text-[10px] text-green-500 font-bold uppercase tracking-widest">Online</p>
+            ) : (
+              <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">
+                {otherUserStatus.lastActive 
+                  ? `Aktif ${formatDistanceToNow(otherUserStatus.lastActive.toDate ? otherUserStatus.lastActive.toDate() : new Date(otherUserStatus.lastActive), { locale: id })} yang lalu`
+                  : 'Offline'}
+              </p>
+            )}
           </div>
         </div>
         <Button variant="ghost" size="icon">
@@ -250,7 +333,7 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
         </Button>
       </header>
 
-      <ScrollArea className="flex-1 p-4 bg-zinc-50/50">
+      <ScrollArea ref={scrollRef} className="flex-1 p-4 bg-zinc-50/50">
         <div className="space-y-4">
           {messages.map((msg) => (
             <div 
@@ -263,11 +346,16 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
                   : 'bg-white text-zinc-900 border-zinc-100 rounded-tl-none'
               }`}>
                 <p className="text-sm leading-relaxed">{msg.text}</p>
-                <p className={`text-[9px] mt-1.5 font-medium uppercase tracking-wider ${
-                  msg.senderId === user?.uid ? 'text-zinc-400' : 'text-zinc-400'
-                }`}>
-                  {msg.createdAt?.seconds ? new Date(msg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                </p>
+                <div className="flex items-center justify-end gap-1.5 mt-1.5">
+                  <p className={`text-[9px] font-medium uppercase tracking-wider ${
+                    msg.senderId === user?.uid ? 'text-zinc-400' : 'text-zinc-400'
+                  }`}>
+                    {msg.createdAt?.seconds ? new Date(msg.createdAt.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Mengirim...'}
+                  </p>
+                  {msg.isOptimistic && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-pulse" />
+                  )}
+                </div>
               </div>
             </div>
           ))}
