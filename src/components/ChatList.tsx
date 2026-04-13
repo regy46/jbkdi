@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { db, auth } from '../firebase';
 import { 
   collection, 
@@ -24,9 +24,34 @@ import { formatDistanceToNow } from 'date-fns';
 import { id } from 'date-fns/locale';
 import { toast } from 'sonner';
 
-export default function ChatList({ onViewProfile }: { onViewProfile?: (userId: string) => void }) {
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  toast.error(`Kesalahan sistem (${operationType}): ${errInfo.error}`);
+  throw new Error(JSON.stringify(errInfo));
+}
+
+export default function ChatList({ onViewProfile, userData }: { onViewProfile: (userId: string) => void, userData?: any }) {
   const [chats, setChats] = useState<any[]>([]);
-  const [selectedChat, setSelectedChat] = useState<any | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const user = auth.currentUser;
 
@@ -61,13 +86,18 @@ export default function ChatList({ onViewProfile }: { onViewProfile?: (userId: s
       }));
       setChats(chatData);
       setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'chats');
+      setLoading(false);
     });
 
     return () => unsubscribe();
   }, [user]);
 
+  const selectedChat = chats.find(c => c.id === selectedChatId);
+
   if (selectedChat) {
-    return <ChatRoom chat={selectedChat} onBack={() => setSelectedChat(null)} onViewProfile={onViewProfile} />;
+    return <ChatRoom chat={selectedChat} onBack={() => setSelectedChatId(null)} onViewProfile={onViewProfile} currentUserData={userData} />;
   }
 
   return (
@@ -98,7 +128,7 @@ export default function ChatList({ onViewProfile }: { onViewProfile?: (userId: s
               key={chat.id}
               initial={{ opacity: 0, y: 5 }}
               animate={{ opacity: 1, y: 0 }}
-              onClick={() => setSelectedChat(chat)}
+              onClick={() => setSelectedChatId(chat.id)}
               className="group cursor-pointer"
             >
               <Card className="p-4 border-zinc-100 hover:bg-zinc-50 transition-colors shadow-none border flex items-center gap-4">
@@ -131,10 +161,14 @@ export default function ChatList({ onViewProfile }: { onViewProfile?: (userId: s
   );
 }
 
-function ChatRoom({ chat, onBack, onViewProfile }: { chat: any, onBack: () => void, onViewProfile?: (userId: string) => void }) {
+function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any, onBack: () => void, onViewProfile?: (userId: string) => void, currentUserData?: any }) {
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const user = auth.currentUser;
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const isAdmin = currentUserData?.role === 'admin';
+  const isOtherBanned = chat.otherUser.status === 'banned' || chat.otherUser.status === 'deleted';
 
   useEffect(() => {
     const q = query(
@@ -144,6 +178,8 @@ function ChatRoom({ chat, onBack, onViewProfile }: { chat: any, onBack: () => vo
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `chats/${chat.id}/messages`);
     });
 
     return () => unsubscribe();
@@ -152,8 +188,8 @@ function ChatRoom({ chat, onBack, onViewProfile }: { chat: any, onBack: () => vo
   const handleSendMessage = async () => {
     if (!newMessage.trim() || !user) return;
 
+    const messageText = newMessage;
     try {
-      const messageText = newMessage;
       setNewMessage('');
 
       const userDoc = await getDoc(doc(db, 'users', user.uid));
@@ -172,7 +208,8 @@ function ChatRoom({ chat, onBack, onViewProfile }: { chat: any, onBack: () => vo
         lastSenderName: userData?.displayName || 'User'
       });
     } catch (error) {
-      toast.error('Gagal mengirim pesan');
+      setNewMessage(messageText); // Restore message on failure
+      handleFirestoreError(error, OperationType.WRITE, `chats/${chat.id}/messages`);
     }
   };
 
@@ -238,15 +275,15 @@ function ChatRoom({ chat, onBack, onViewProfile }: { chat: any, onBack: () => vo
       </ScrollArea>
 
       <div className="p-4 border-t bg-white">
-        {chat.otherUser.status === 'banned' ? (
+        {isOtherBanned && !isAdmin ? (
           <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl text-center font-medium flex items-center justify-center gap-2">
             <ShieldAlert className="w-4 h-4" />
-            Akun ini sudah di-ban karena melanggar aturan
+            Akun ini sudah di-ban atau dihapus karena melanggar aturan
           </div>
         ) : (
           <div className="flex gap-2 max-w-2xl mx-auto w-full">
             <Input 
-              placeholder="Ketik pesan..." 
+              placeholder={isOtherBanned ? "Ketik pesan (Admin Mode)..." : "Ketik pesan..."}
               className="rounded-full bg-zinc-100 border-none px-6 h-11"
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}

@@ -35,6 +35,14 @@ export default function App() {
         unsubscribeDoc = onSnapshot(doc(db, 'users', firebaseUser.uid), (docSnap) => {
           if (docSnap.exists()) {
             const data = docSnap.data();
+            
+            // If user is banned or deleted, sign them out immediately
+            if (data.status === 'banned' || data.status === 'deleted') {
+              auth.signOut();
+              toast.error(data.status === 'banned' ? 'Akun Anda telah di-ban karena melanggar aturan.' : 'Akun Anda telah dihapus oleh admin.');
+              return;
+            }
+
             // Auto-promote egimmm12 and admin to admin role
             const isAdminAccount = firebaseUser.email === 'egimmm12@gmail.com' || data.username === 'egimmm12' || data.username === 'admin';
             if (isAdminAccount && (data.role !== 'admin' || !data.isVerified)) {
@@ -44,7 +52,10 @@ export default function App() {
             }
             setUserData(data);
           } else {
-            // Handle orphaned auth accounts by creating the missing firestore document
+            // Check if we should create a new user (only if not recently deleted/banned)
+            // To prevent recreation of deleted accounts, we could use a flag or just let it be.
+            // However, the user's issue is likely that "banned" status is being overwritten or ignored.
+            
             const defaultUserData = {
               uid: firebaseUser.uid,
               username: firebaseUser.email?.split('@')[0] || 'user',
@@ -53,10 +64,15 @@ export default function App() {
               kecamatan: '',
               photoURL: firebaseUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${firebaseUser.uid}`,
               createdAt: new Date().toISOString(),
+              status: 'active',
+              role: 'user'
             };
             setUserData(defaultUserData);
             setDoc(doc(db, 'users', firebaseUser.uid), defaultUserData).catch(console.error);
           }
+          setLoading(false);
+        }, (error) => {
+          console.error('Error in user snapshot listener:', error);
           setLoading(false);
         });
       } else {
@@ -105,6 +121,8 @@ export default function App() {
           }
         }
       });
+    }, (error) => {
+      console.error('Error in chats notification listener:', error);
     });
 
     return () => unsubscribe();
@@ -175,7 +193,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <ChatList onViewProfile={handleViewProfile} />
+              <ChatList onViewProfile={handleViewProfile} userData={userData} />
             </motion.div>
           )}
           {activeTab === 'profile' && (

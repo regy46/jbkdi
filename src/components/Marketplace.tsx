@@ -39,6 +39,31 @@ import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { id } from 'date-fns/locale';
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  toast.error(`Kesalahan sistem (${operationType}): ${errInfo.error}`);
+  throw new Error(JSON.stringify(errInfo));
+}
+
 export default function Marketplace({ onViewProfile, onNavigateToChats }: { onViewProfile?: (userId: string) => void, onNavigateToChats?: () => void }) {
   const [listings, setListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -372,35 +397,53 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
   };
 
   const startChat = async () => {
-    if (!user || user.uid === listing.authorId) return;
-    
-    const chatId = [user.uid, listing.authorId].sort().join('_');
-    const chatRef = doc(db, 'chats', chatId);
-    const chatSnap = await getDoc(chatRef);
-
-    if (!chatSnap.exists()) {
-      const userDoc = await getDoc(doc(db, 'users', user.uid));
-      const userData = userDoc.data();
-      
-      await setDoc(chatRef, {
-        id: chatId,
-        participants: [user.uid, listing.authorId],
-        lastMessage: 'Halo, saya tertarik dengan postingan Anda!',
-        lastMessageAt: serverTimestamp(),
-        lastSenderId: user.uid,
-        lastSenderName: userData?.displayName || 'User'
-      });
-
-      // Also send the actual message document
-      await addDoc(collection(db, 'chats', chatId, 'messages'), {
-        senderId: user.uid,
-        text: 'Halo, saya tertarik dengan postingan Anda!',
-        createdAt: serverTimestamp()
-      });
+    if (!user) {
+      toast.error('Silakan login untuk memulai chat');
+      return;
+    }
+    if (user.uid === listing.authorId) {
+      toast.error('Anda tidak bisa chat dengan diri sendiri');
+      return;
     }
     
-    toast.success('Buka tab Chat untuk memulai percakapan');
-    onNavigateToChats?.();
+    try {
+      const chatId = [user.uid, listing.authorId].sort().join('_');
+      const chatRef = doc(db, 'chats', chatId);
+      
+      let chatSnap;
+      try {
+        chatSnap = await getDoc(chatRef);
+      } catch (error) {
+        // If getDoc fails, we try to create it anyway (rules will handle)
+        console.warn('getDoc failed, proceeding with creation attempt');
+      }
+
+      if (!chatSnap?.exists()) {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        const userData = userDoc.data();
+        
+        await setDoc(chatRef, {
+          id: chatId,
+          participants: [user.uid, listing.authorId],
+          lastMessage: 'Halo, saya tertarik dengan postingan Anda!',
+          lastMessageAt: serverTimestamp(),
+          lastSenderId: user.uid,
+          lastSenderName: userData?.displayName || 'User'
+        });
+
+        // Also send the actual message document
+        await addDoc(collection(db, 'chats', chatId, 'messages'), {
+          senderId: user.uid,
+          text: 'Halo, saya tertarik dengan postingan Anda!',
+          createdAt: serverTimestamp()
+        });
+      }
+      
+      toast.success('Membuka percakapan...');
+      onNavigateToChats?.();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `chats/${[user.uid, listing.authorId].sort().join('_')}`);
+    }
   };
 
   const handleReport = async () => {
@@ -478,8 +521,10 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           )}
           {isAdmin && (
             <Dialog open={isBanDialogOpen} onOpenChange={setIsBanDialogOpen}>
-              <DialogTrigger render={<Button variant="ghost" size="icon-xs" className="text-red-500" />}>
-                <ShieldAlert className="w-4 h-4" />
+              <DialogTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50">
+                  <ShieldAlert className="w-4 h-4" />
+                </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
@@ -495,8 +540,10 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           )}
           {(isOwner || isAdmin) && (
             <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-              <DialogTrigger render={<Button variant="ghost" size="icon-xs" className="text-zinc-400 hover:text-red-500" />}>
-                <Trash2 className="w-4 h-4" />
+              <DialogTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-red-500 hover:bg-red-50">
+                  <Trash2 className="w-4 h-4" />
+                </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
@@ -512,8 +559,10 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           )}
           {!isOwner && (
             <Dialog open={isReportDialogOpen} onOpenChange={setIsReportDialogOpen}>
-              <DialogTrigger render={<Button variant="ghost" size="icon-xs" className="text-zinc-400 hover:text-orange-500" />}>
-                <Flag className="w-4 h-4" />
+              <DialogTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-orange-500 hover:bg-orange-50">
+                  <Flag className="w-4 h-4" />
+                </Button>
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>

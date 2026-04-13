@@ -18,6 +18,31 @@ import { ShieldAlert, Trash2, CheckCircle2, XCircle, Flag, ExternalLink, User as
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { id } from 'date-fns/locale';
+import { auth } from '../firebase';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 export default function AdminDashboard({ onViewProfile }: { onViewProfile: (userId: string) => void }) {
   const [reports, setReports] = useState<any[]>([]);
@@ -27,6 +52,9 @@ export default function AdminDashboard({ onViewProfile }: { onViewProfile: (user
     const q = query(collection(db, 'reports'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setReports(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'reports');
       setLoading(false);
     });
     return () => unsubscribe();
@@ -53,10 +81,10 @@ export default function AdminDashboard({ onViewProfile }: { onViewProfile: (user
         await deleteDoc(doc(db, 'listings', report.targetId));
         toast.success('Postingan berhasil dihapus');
       } else if (action === 'delete_user') {
-        await deleteDoc(doc(db, 'users', report.targetId));
+        await updateDoc(doc(db, 'users', report.targetId), { status: 'deleted' });
         toast.success('Pengguna berhasil dihapus');
       }
-      await handleResolve(report.id, 'resolved');
+      await updateDoc(doc(db, 'reports', report.id), { status: 'resolved' });
     } catch (error) {
       toast.error('Gagal melakukan tindakan');
     }
