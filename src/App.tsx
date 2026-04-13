@@ -24,6 +24,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'home' | 'chats' | 'profile' | 'admin'>('home');
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [showCreateListing, setShowCreateListing] = useState(false);
 
   useEffect(() => {
@@ -204,7 +205,10 @@ export default function App() {
             >
               <Marketplace 
                 onViewProfile={handleViewProfile} 
-                onNavigateToChats={() => setActiveTab('chats')} 
+                onNavigateToChats={(chatId?: string) => {
+                  if (chatId) setSelectedChatId(chatId);
+                  setActiveTab('chats');
+                }} 
                 userData={userData}
               />
             </motion.div>
@@ -216,7 +220,12 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <ChatList onViewProfile={handleViewProfile} userData={userData} />
+              <ChatList 
+                onViewProfile={handleViewProfile} 
+                userData={userData} 
+                initialChatId={selectedChatId}
+                onChatClosed={() => setSelectedChatId(null)}
+              />
             </motion.div>
           )}
           {activeTab === 'profile' && (
@@ -258,8 +267,11 @@ export default function App() {
             label="Beranda" 
           />
           <NavButton 
-            active={activeTab === 'chats'} 
-            onClick={() => setActiveTab('chats')} 
+            active={activeTab === 'chats' && !selectedChatId} 
+            onClick={() => {
+              setSelectedChatId(null);
+              setActiveTab('chats');
+            }} 
             icon={<MessageSquare />} 
             label="Chat" 
           />

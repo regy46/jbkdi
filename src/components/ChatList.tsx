@@ -51,11 +51,17 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 
 const userCache: { [key: string]: any } = {};
 
-export default function ChatList({ onViewProfile, userData }: { onViewProfile: (userId: string) => void, userData?: any }) {
+export default function ChatList({ onViewProfile, userData, initialChatId, onChatClosed }: { onViewProfile: (userId: string) => void, userData?: any, initialChatId?: string | null, onChatClosed?: () => void }) {
   const [chats, setChats] = useState<any[]>([]);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(initialChatId || null);
   const [loading, setLoading] = useState(true);
   const user = auth.currentUser;
+
+  useEffect(() => {
+    if (initialChatId !== undefined) {
+      setSelectedChatId(initialChatId);
+    }
+  }, [initialChatId]);
 
   useEffect(() => {
     if (!user) return;
@@ -68,11 +74,11 @@ export default function ChatList({ onViewProfile, userData }: { onViewProfile: (
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       try {
         const chatData = await Promise.all(snapshot.docs.map(async (chatDoc) => {
-          const data = chatDoc.data();
-          const otherUserId = data.participants.find((p: string) => p !== user.uid);
+          const data = chatDoc.data() as any;
+          const otherUserId = data.participants?.find((p: string) => p !== user.uid);
           
-          let otherUserData = userCache[otherUserId];
-          if (!otherUserData) {
+          let otherUserData = otherUserId ? userCache[otherUserId] : null;
+          if (!otherUserData && otherUserId) {
             try {
               const otherUserDoc = await getDoc(doc(db, 'users', otherUserId));
               otherUserData = otherUserDoc.data();
@@ -88,7 +94,7 @@ export default function ChatList({ onViewProfile, userData }: { onViewProfile: (
             id: chatDoc.id,
             ...data,
             otherUser: {
-              uid: otherUserId,
+              uid: otherUserId || 'unknown',
               displayName: otherUserData?.displayName || 'User',
               photoURL: otherUserData?.photoURL || '',
               isVerified: otherUserData?.isVerified || false,
@@ -100,9 +106,9 @@ export default function ChatList({ onViewProfile, userData }: { onViewProfile: (
         }));
 
         // Sort client-side to avoid composite index requirement
-        chatData.sort((a, b) => {
-          const timeA = a.lastMessageAt?.seconds || 0;
-          const timeB = b.lastMessageAt?.seconds || 0;
+        chatData.sort((a: any, b: any) => {
+          const timeA = a.lastMessageAt?.seconds || Infinity;
+          const timeB = b.lastMessageAt?.seconds || Infinity;
           return timeB - timeA;
         });
 
@@ -113,17 +119,25 @@ export default function ChatList({ onViewProfile, userData }: { onViewProfile: (
         setLoading(false);
       }
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'chats');
+      console.error('Error fetching chats:', error);
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, [user]);
 
-  const selectedChat = chats.find(c => c.id === selectedChatId);
-
-  if (selectedChat) {
-    return <ChatRoom chat={selectedChat} onBack={() => setSelectedChatId(null)} onViewProfile={onViewProfile} currentUserData={userData} />;
+  if (selectedChatId) {
+    const selectedChat = chats.find(c => c.id === selectedChatId);
+    if (selectedChat) {
+      return <ChatRoom chat={selectedChat} onBack={() => {
+        setSelectedChatId(null);
+        onChatClosed?.();
+      }} onViewProfile={onViewProfile} currentUserData={userData} />;
+    } else if (!loading) {
+      // If we have a selected ID but no chat is found and we're done loading,
+      // it might be a brand new chat that hasn't synced yet.
+      // We'll just wait for the snapshot to update.
+    }
   }
 
   return (
@@ -205,18 +219,18 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const newMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
       setMessages(prev => {
         // Keep optimistic messages that haven't been synced yet
         const optimistic = prev.filter(m => m.isOptimistic && !newMessages.find(nm => nm.text === m.text && nm.senderId === m.senderId));
         return [...newMessages, ...optimistic].sort((a: any, b: any) => {
-          const timeA = a.createdAt?.seconds || 0;
-          const timeB = b.createdAt?.seconds || 0;
+          const timeA = a.createdAt?.seconds || Infinity;
+          const timeB = b.createdAt?.seconds || Infinity;
           return timeA - timeB;
         });
       });
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, `chats/${chat.id}/messages`);
+      console.error('Error fetching messages:', error);
     });
 
     return () => unsubscribe();
@@ -293,9 +307,9 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
-      className="fixed inset-0 z-50 bg-white flex flex-col"
+      className="fixed inset-0 z-50 bg-white flex flex-col h-[100dvh] w-full"
     >
-      <header className="h-16 border-b flex items-center px-4 gap-4 bg-white/80 backdrop-blur sticky top-0">
+      <header className="h-16 border-b flex items-center px-4 gap-4 bg-white/90 backdrop-blur sticky top-0 z-10">
         <Button variant="ghost" size="icon" onClick={onBack}>
           <ArrowLeft className="w-5 h-5" />
         </Button>
@@ -362,7 +376,7 @@ function ChatRoom({ chat, onBack, onViewProfile, currentUserData }: { chat: any,
         </div>
       </ScrollArea>
 
-      <div className="p-4 border-t bg-white">
+      <div className="p-4 border-t bg-white pb-[max(1rem,env(safe-area-inset-bottom))]">
         {isOtherBanned && !isAdmin ? (
           <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl text-center font-medium flex items-center justify-center gap-2">
             <ShieldAlert className="w-4 h-4" />

@@ -69,7 +69,7 @@ export default function AdminDashboard({ onViewProfile }: { onViewProfile: (user
     }
   };
 
-  const handleAction = async (report: any, action: 'ban_listing' | 'ban_user' | 'delete_listing' | 'delete_user') => {
+  const handleAction = async (report: any, action: 'ban_listing' | 'ban_user') => {
     try {
       if (action === 'ban_listing') {
         await updateDoc(doc(db, 'listings', report.targetId), { status: 'banned' });
@@ -77,12 +77,6 @@ export default function AdminDashboard({ onViewProfile }: { onViewProfile: (user
       } else if (action === 'ban_user') {
         await updateDoc(doc(db, 'users', report.targetId), { status: 'banned' });
         toast.success('Pengguna berhasil di-ban');
-      } else if (action === 'delete_listing') {
-        await deleteDoc(doc(db, 'listings', report.targetId));
-        toast.success('Postingan berhasil dihapus');
-      } else if (action === 'delete_user') {
-        await updateDoc(doc(db, 'users', report.targetId), { status: 'deleted' });
-        toast.success('Pengguna berhasil dihapus');
       }
       await updateDoc(doc(db, 'reports', report.id), { status: 'resolved' });
     } catch (error) {
@@ -149,34 +143,24 @@ export default function AdminDashboard({ onViewProfile }: { onViewProfile: (user
                 </div>
 
                 {report.status === 'pending' && (
-                  <div className="flex flex-col gap-2 pt-2">
-                    <div className="flex gap-2">
+                    <div className="flex flex-col gap-2 pt-2">
                       <Button 
                         variant="destructive" 
                         size="sm" 
-                        className="flex-1 h-9 text-xs font-bold uppercase tracking-wider"
+                        className="w-full h-9 text-xs font-bold uppercase tracking-wider"
                         onClick={() => handleAction(report, report.targetType === 'listing' ? 'ban_listing' : 'ban_user')}
                       >
                         Ban {report.targetType === 'listing' ? 'Post' : 'User'}
                       </Button>
                       <Button 
-                        variant="destructive" 
+                        variant="outline" 
                         size="sm" 
-                        className="flex-1 h-9 text-xs font-bold uppercase tracking-wider bg-red-800 hover:bg-red-900"
-                        onClick={() => handleAction(report, report.targetType === 'listing' ? 'delete_listing' : 'delete_user')}
+                        className="w-full h-9 text-xs font-bold uppercase tracking-wider"
+                        onClick={() => handleResolve(report.id, 'dismissed')}
                       >
-                        <Trash2 className="w-4 h-4 mr-1" /> Hapus
+                        Abaikan
                       </Button>
                     </div>
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      className="w-full h-9 text-xs font-bold uppercase tracking-wider"
-                      onClick={() => handleResolve(report.id, 'dismissed')}
-                    >
-                      Abaikan
-                    </Button>
-                  </div>
                 )}
               </CardContent>
             </Card>

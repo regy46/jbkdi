@@ -64,7 +64,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-export default function Marketplace({ onViewProfile, onNavigateToChats, userData }: { onViewProfile?: (userId: string) => void, onNavigateToChats?: () => void, userData?: any }) {
+export default function Marketplace({ onViewProfile, onNavigateToChats, userData }: { onViewProfile?: (userId: string) => void, onNavigateToChats?: (chatId?: string) => void, userData?: any }) {
   const [listings, setListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'sale' | 'request'>('all');
@@ -413,14 +413,13 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
       try {
         chatSnap = await getDoc(chatRef);
       } catch (error) {
-        // If getDoc fails, we try to create it anyway (rules will handle)
         console.warn('getDoc failed, proceeding with creation attempt');
       }
 
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      const userData = userDoc.data();
+
       if (!chatSnap?.exists()) {
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        const userData = userDoc.data();
-        
         await setDoc(chatRef, {
           id: chatId,
           participants: [user.uid, listing.authorId],
@@ -428,7 +427,7 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           lastMessageAt: serverTimestamp(),
           lastSenderId: user.uid,
           lastSenderName: userData?.displayName || 'User'
-        });
+        }, { merge: true });
 
         // Also send the actual message document
         await addDoc(collection(db, 'chats', chatId, 'messages'), {
@@ -436,10 +435,15 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           text: 'Halo, saya tertarik dengan postingan Anda!',
           createdAt: serverTimestamp()
         });
+      } else {
+        // Ensure participants array exists for older chats
+        await setDoc(chatRef, {
+          participants: [user.uid, listing.authorId]
+        }, { merge: true });
       }
       
       toast.success('Membuka percakapan...');
-      onNavigateToChats?.();
+      onNavigateToChats?.(chatId);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `chats/${[user.uid, listing.authorId].sort().join('_')}`);
     }
@@ -506,9 +510,9 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
         <div className="flex items-center gap-2">
           {!isOwner && !hideActions && (
             <Button 
-              variant="outline" 
+              variant="default" 
               size="sm" 
-              className="h-8 text-xs font-bold gap-1.5 rounded-full border-zinc-200"
+              className="h-8 text-xs font-bold gap-1.5 rounded-full shadow-sm bg-zinc-900 text-white hover:bg-zinc-800"
               onClick={(e) => {
                 e.stopPropagation();
                 startChat();
@@ -537,7 +541,7 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
               </DialogContent>
             </Dialog>
           )}
-          {(isOwner || isAdmin) && (
+          {isOwner && (
             <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
               <DialogTrigger render={
                 <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-red-500 hover:bg-red-50">
@@ -655,14 +659,15 @@ export function ListingCard({ listing, onLike, hideActions = false, onViewProfil
           {user?.uid !== listing.authorId && (
             <Button 
               size="sm" 
-              variant="outline" 
-              className="rounded-full h-8 px-4 text-xs font-bold uppercase tracking-wider cursor-pointer z-10" 
+              variant="default" 
+              className="rounded-full h-9 px-6 text-xs font-bold uppercase tracking-wider cursor-pointer z-10 bg-zinc-900 text-white hover:bg-zinc-800 shadow-md" 
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 startChat();
               }}
             >
+              <MessageCircle className="w-3.5 h-3.5 mr-2" />
               Tanya Penjual
             </Button>
           )}
